@@ -1,0 +1,27 @@
+name: local_task_manager
+description: "A Flutter task manager that stores tasks locally with SQLite."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # SQLite plugin for Flutter (Android and iOS)
+  sqflite: ^2.4.1
+  # Builds the database file path in a platform-safe way
+  path: ^1.9.0
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  # Lets the repository tests run SQLite on a desktop (no phone needed)
+  sqflite_common_ffi: ^2.3.4
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
