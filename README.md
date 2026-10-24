@@ -86,57 +86,59 @@ flutter test
 
 ### 1. Why does the application use SQLite instead of relying only on a Dart list?
 
-A Dart list only lives in memory (RAM). In the Activity, the tasks showed up while the app was running, but once the app process ended and was launched again, the list was empty because nothing had been written to storage. SQLite saves the tasks in a file on the device (`tasks.db`), so when the app opens again, `_loadTasks()` in `TaskScreen` calls `repository.getAll()`, which reads the rows back from that file.
+A Dart list only stores data in memory, so the tasks will disappear when the app is closed. SQLite solves this problem by saving the tasks in a database file called tasks.db. When I open the app again, _loadTasks() in TaskScreen calls repository.getAll() to load the saved tasks from the database.
 
-SQLite also gives me things a plain list does not: a fixed structure for each task (the `tasks` table), queries that can sort records (`orderBy: 'id DESC'` shows the newest first), updates and deletes that target one record with a `where` condition, and constraints such as `NOT NULL` and `DEFAULT 0`. If I only used a list, I would have to write my own file format and my own code for loading, searching, and saving everything. My test `tasks are still there after the database is closed and reopened` checks this by closing the database file, opening it again, and confirming the task is still there.
+SQLite also makes managing tasks easier. I can organize them in a table, sort them using id DESC to show the newest tasks first, and update or delete specific tasks. It also has rules like NOT NULL and DEFAULT 0 to help keep the data consistent. I tested this by closing and reopening the database and checking if the tasks were still there.
 
-The list still exists in my app (`List<Task> _tasks` in the screen), but it is only a copy of what is in the database for displaying on screen. The database is the real record.
+My app still uses a Dart list (List<Task> _tasks) to display the tasks on the screen, but the actual data is saved in SQLite. This means the tasks will still be there even after I close the app.
 
 ### 2. What is the purpose of the primary key in the `tasks` table?
 
-The `id` column (`INTEGER PRIMARY KEY AUTOINCREMENT`) gives every task its own unique number, even if two tasks have the same title. My app uses this id whenever it changes a specific task:
+The id column (INTEGER PRIMARY KEY AUTOINCREMENT) gives each task a unique number. This is important because two tasks can have the same title but still need to be treated as different tasks.
 
-```dart
+For example, when I complete or delete a task, the app uses its id to identify which record to change.
+
 db.update('tasks', {'is_completed': isCompleted ? 1 : 0},
     where: 'id = ?', whereArgs: [id]);
 
 db.delete('tasks', where: 'id = ?', whereArgs: [id]);
-```
 
-If I used the title instead, completing or deleting "Submit assignment" would affect every task with that same title. With the id, only the one row the user tapped is changed. The id is also stored in the `Task` object, so each row in the `ListView` knows exactly which database record it belongs to. Because the ids increase over time, I can also sort by `id DESC` to show the newest tasks first.
+If I used the task title instead, deleting one task could accidentally delete other tasks with the same title. Using the id makes sure that only the selected task is affected. It also helps the app identify each task in the list and show the newest tasks first by sorting them with id DESC.
 
 ### 3. How does the repository simplify the UI's interaction with the database?
 
-`TaskScreen` only calls four simple methods: `create(title)`, `getAll()`, `markCompleted(id)`, and `delete(id)`. It does not know the table name, the column names, the SQL, or that `is_completed` is stored as `0` or `1`. The repository takes care of those details:
+The repository makes it easier for the UI to work with the database because the screen only needs to call methods like create(title), getAll(), markCompleted(id), and delete(id). I do not have to write the database queries directly inside the UI.
 
-- It trims the title and throws an error if it is empty, so invalid data never reaches the database.
-- It converts database maps into `Task` objects with `Task.fromMap`, so the UI works with `task.title` and `task.isCompleted` instead of `row['is_completed'] == 1`.
-- It checks how many rows were changed, and throws `TaskNotFoundException` if an update or delete affected 0 rows. The screen catches this and shows an error instead of a false "success" message.
+The repository handles things like checking if the task title is empty, converting database records into Task objects, and making sure the task exists before updating or deleting it. If a task cannot be found, it throws a TaskNotFoundException, which the screen can catch and display as an error.
 
-Because all data access is in one place, if the database code changes I only need to update the repository and `task_database.dart`, not the widget. It also made testing easier: my tests in `test/task_repository_test.dart` check the repository with an in-memory database without needing to build the UI at all.
+This makes the code easier to manage because the database operations are kept in one place. If I need to change how the database works, I can mostly make those changes in the repository and task_database.dart without having to rewrite the UI.
+
+It also makes testing easier. For example, I can test the repository using an in-memory database without needing to run the entire app or build the UI.
 
 ### 4. What would happen if a task were removed from the displayed list but not deleted from SQLite?
 
-The task would disappear from the screen for now, but the row would still be in `tasks.db`. The next time the list is loaded from the database (after adding another task, completing a task, or reopening the app) the "deleted" task would come back. The user would think delete is broken, and the database and the screen would be out of sync.
+The task would disappear from the screen, but its record would still be saved in the database. When the app loads the tasks again, the deleted task would show up again because it was never actually removed from SQLite.
 
-To prevent this, my `_deleteTask()` method first calls `repository.delete(task.id)`, which runs `db.delete(...)` with the task's id. Only after that succeeds does it show "Task deleted." and call `_loadTasks()` to reload the list from the database. If the delete fails, the app shows an error and leaves the list as it is, so the screen always matches what is actually stored.
+This could make the app confusing to use because the displayed list would not match the data saved in the database.
+
+To avoid this, my _deleteTask() method first calls repository.delete(task.id) to remove the task from the database. Once the deletion succeeds, the app shows the "Task deleted." message and calls _loadTasks() to refresh the list.
+
+If the deletion fails, the app shows an error instead of pretending that the task was deleted. This helps keep the displayed tasks consistent with the data stored in the database.
 
 ### 5. If the database schema later needed a new column for task priority, what parts of the application might need to change?
 
-- **Database (`task_database.dart`):** Add the column to the `CREATE TABLE` statement for new installs, increase `version` from `1` to `2`, and add an `onUpgrade` callback that runs `ALTER TABLE tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0` for users who already have version 1. Without the migration, existing users would keep the old table and the app would fail when it tries to use `priority`.
-- **CRUD functions:** `addTask()` would need to insert the priority, and I might add a function to update it. `getTasks()` could sort by priority (for example `orderBy: 'priority DESC, id DESC'`).
-- **Model (`task.dart`):** Add a `priority` field and update `fromMap()` and `toMap()`.
-- **Repository (`task_repository.dart`):** Change `create()` to accept a priority, validate it (for example only 0, 1, or 2), and add a method such as `updatePriority(id, priority)`.
-- **UI (`task_screen.dart`):** Add a way to choose the priority when adding a task (like a dropdown) and show it in each list item.
-- **Tests:** Update the test database setup and add tests for the new column.
+Several parts of the application would need to be updated to support task priority.
 
-Because of the repository, the screen would only change where it needs to show or pick the priority. It still would not need to know any SQL.
+Database (task_database.dart): I would add a priority column to the table and increase the database version from 1 to 2. I would also add an onUpgrade callback with ALTER TABLE tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 0 so existing users can update their database without losing their saved tasks.
 
----
+CRUD functions: The functions that add or retrieve tasks might need to be updated to support priority. For example, I could sort tasks by priority using orderBy: 'priority DESC, id DESC'.
 
-## References
+Model (task.dart): I would add a priority field and update fromMap() and toMap() so the model can read and save the new value.
 
-- Flutter. (n.d.). *Persist data with SQLite*. https://docs.flutter.dev/cookbook/persistence/sqlite
-- SQLite Consortium. (n.d.). *CREATE TABLE*. https://www.sqlite.org/lang_createtable.html
-- Tekartik. (n.d.). *sqflite: Flutter plugin for SQLite*. https://pub.dev/packages/sqflite
-- Dart. (n.d.). *Asynchronous programming: Futures, async, and await*. https://dart.dev/libraries/async/async-await
+Repository (task_repository.dart): I would update create() to accept a priority value and add a method like updatePriority(id, priority) to change a task's priority. I could also validate the value to allow only priorities such as 0, 1, or 2.
+
+UI (task_screen.dart): I would add a way for users to choose a priority when creating a task, such as a dropdown, and display the selected priority in the task list.
+
+Tests: I would update the test setup and add tests to check if priority values are saved, loaded, and updated correctly.
+
+The good thing about using a repository is that the UI does not need to handle the SQL queries directly. I would only need to change the parts of the screen related to choosing and displaying the task priority.
